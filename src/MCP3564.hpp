@@ -3,7 +3,9 @@
     Date started: 08/31/2023
     Last Updated: 
 
-    SPI Driver for the MCU on a teensy 4.1 to talk to ADC 9 click
+    SPI Driver for the MCU on a teensy 4.1 to talk to ADC 9 click.
+
+    For CSULB Beach Launch Team.
 */
 
 
@@ -14,7 +16,7 @@
 
 #include <Arduino.h>
 #include <SPI.h>
-
+#include "MCP3564_options.HPP"
 // Mux settings
 #define MCP_OFFSET (0x88)  
 #define MCP_VCM    (0xF8) 
@@ -33,7 +35,24 @@
 #define MCP_CH1    (0x18) 
 #define MCP_CH0    (0x08)  
 
-#define MCP3564_DEVICE_TYPE    (0x000F)  //!< MCP3564 device ID
+#define MCP3564_DEVICE_TYPE     (0x000F)  // MCP3564 device ID
+
+#define MCP3564_DEVICE_ADDR     (0b01)  // AAC-1852-VP9, not sure abt the SPI address yet
+                                        // If it's not 1, then try 2,3, or 4
+
+// USE _SPI.Transfer(FASTCMD_...)
+#define FASTCMD_DONTCARE        ((MCP3564_DEVICE_ADDR << 6) | 0) // for selecting the device on the bus if multiple devices are used on the same SPI bus
+#define FASTCMD_CONVERSION      ((MCP3564_DEVICE_ADDR << 6) | 0b101000)
+#define FASTCMD_STANDBY         ((MCP3564_DEVICE_ADDR << 6) | 0b101100)
+#define FASTCMD_SHUTDOWN        ((MCP3564_DEVICE_ADDR << 6) | 0b110000)
+#define FASTCMD_FULLSHUTDOWN    ((MCP3564_DEVICE_ADDR << 6) | 0b110100)
+#define FASTCMD_FULLRESET       ((MCP3564_DEVICE_ADDR << 6) | 0b111000) // reset entire register map to default value according to the datasheet
+
+// for the 3 commands below, insert register address via | 0b0000'00, where the first 4 MS bits are the register address
+#define FASTCMD_STATIC_READ     ((MCP3564_DEVICE_ADDR << 6) | 0b01)
+#define FASTCMD_INCR_WRITE      ((MCP3564_DEVICE_ADDR << 6) | 0b10)
+#define FASTCMD_INCR_READ       ((MCP3564_DEVICE_ADDR << 6) | 0b11)
+
 
 // Register map
 #define ADCDATA_reg     (0x00)
@@ -58,272 +77,17 @@
 #define MAX_SPI_SPEED 2'000'000
 // use MSBFIRST and SPI_MODE
 
-////////////////////////////////////////////////////////////////////////////////
-//////////////////// REGISTER OPTIONS //////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////
-
-/////////////////////////// CONFIG0 register options ///////////////////////////
-enum class ADC_MODE // [1:0], ADC Operating Mode Selection
+struct status
 {
-    ADC_Shutdown_default = 0,
-    ADC_Shutdown = 1,
-    ADC_Standby = 2,
-    ADC_Conversion = 3 // <-------------- want this setting
+    bool DR = 1;
+    bool CRCCFG = 1;
+    bool POR = 1;
 };
-
-enum class CS_SEL // [3:2], Current Source/Sink Selection Bits for Sensor Bias (source on Vin+/sink on Vin-)
-{
-    CS_SEL_0MuA_default = 0,
-    CS_SEL_0p9MuA = 1,
-    CS_SEL_3p7MuA = 2,
-    CS_SEL_15MuA = 3,
-};
-
-enum class CLK_SEL // [5:4], Clock Selection
-{
-    ExtDigitalClock_default = 0,
-    ExtDigitalClock = 1,
-    IntClock_NoClockOutput = 2,
-    IntClock_AMCLKPresent = 3
-};
-
-enum class CONFIG0  // [7:6], Full Shutdown Mode Enabled
-                    // these bits are writen but have no effect except that they force FULL SHUTDOWN mode
-                    // when they are set to "00" and when all other CONFIG0 bits are set to '0'
-{
-    FULL_SHUTDOWN = 0
-};
-
-/////////////////////////// CONFIG1 register ///////////////////////////////////
-
-// [1:0] reserved
-
-enum class OSR // [6:3], Oversampling 
-{
-    OSR_32 = 0,
-    OSR_64 = 1,
-    OSR_128 = 2,
-    OSR_256_default = 3, // default
-    OSR_512 = 4, 
-    OSR_1024 = 5,
-    OSR_2048 = 6,
-    OSR_4096 = 7,
-    OSR_8192 = 8,
-    OSR_16384 = 9,
-    OSR_20480 = 10,
-    OSR_24576 = 11,
-    OSR_40960 = 12,
-    OSR_49152 = 13,
-    OSR_81920 = 14,
-    OSR_98304 = 15 
-};
-
-enum class PRE // [7:6], Prescaler Value Selection for AMCLK
-{
-    MCLK_Div1_default = 0, // default
-    MCLK_Div2 = 1,
-    MCLK_Div4 = 2,
-    MCLK_Div8 = 3
-};
-
-/////////////////////////// CONFIG2 register ///////////////////////////////////
-
-// [1:0] reserved, should always be set to '11' or 3
-
-enum class AZ_MUX // [2], Auto-Zeroing MUX setting
-{
-    AZ_Disable_default = 0, 
-    AZ_Enable = 1
-};
-
-enum class GAIN // [5:3], ADC Gain Selection
-{
-    GAIN_x1div3 = 0,
-    GAIN_x1_default = 1,
-    GAIN_x2 = 2,
-    GAIN_x4 = 3,
-    GAIN_x8 = 4,
-    GAIN_x16 = 5,
-    GAIN_x32 = 6, // (x16 analog, x2 digital)
-    GAIN_x64 = 7 // (x16 analog, x4 digital) 
-};
-
-enum class BOOST // [7:6], ADC Bias Current Selection
-{
-    ADC_BIAS_x0p5 = 0,
-    ADC_BIAS_x0p66 = 1,
-    ADC_BIAS_x1 = 2,
-    ADC_BIAS_x2 = 3
-};
-
-/////////////////////////// CONFIG3 register ///////////////////////////////////
-
-enum class EN_GAINCAL // [0], Enable Digital Gain Calibration
-{
-    Disabled_default = 0,
-    Enabled = 1
-};
-
-enum class EN_OFFCAL // [1], Enable Digital Offset Calibration
-{
-    Disabled_default = 0,
-    Enabled = 1
-};
-
-enum class EN_CRCCOM // [2], CRC Checksum Selection on Read COmmunications
-{
-    CRC_OnCom_Disabled_default = 0,
-    CRC_OnCom_Enabled = 1
-};
-
-enum class CRC_FORMAT // [3], CRC Checksum Format Selection on Read Communications
-{
-    CRC_16bit_default = 0,
-    CRC_32bit = 1
-};
-
-enum class DATA_FORMAT // [5:4], ADC Output Data Format Selection
-{
-    FORMAT_24bit_default = 0,
-    FORMAT_32bit_24BitLeftJustified = 1,
-    FORMAT_32bit_25BitrightJustified = 2,
-    FORMAT_32bit_25BitRightJustified_CHID = 3
-};
-
-enum class CONV_MODE // [7:6], Conversion Mode Selection
-{
-    Oneshot_Shutdown_default1 = 0, // options 1 and 0 are the same
-    Oneshot_Shutdown_default2 = 1, // options 1 and 0 are the same
-    Oneshot_Standby = 2,   //
-    Continuous = 3 // <------------ NEED THIS SETTING
-};
-
-/////////////////////////// IRQ register ///////////////////////////////////
-
-enum class EN_STP // [0], Enable conversion Start Interrupt Output
-{
-    Disabled = 0,
-    Enabled_default = 1
-};
-
-enum class EN_FASTCMD // [1], Enable Fast Commands in the COMMAND Byte
-{
-    Disabled = 0,
-    Enabled_default = 1
-};
-
-enum class IRQ_MODE // [3:2] 
-{
-    IRQ_HighZ = 0,
-    IRQ_LogicHigh = 1,
-    MDAT_HighZ = 2,
-    MDAT_LogicHigh = 3
-};
-// use the 3 status bits to check for last read
-
-
-/////////////////////////// MUX Register ///////////////////////////////////
-enum class MUX_VIN_neg // [0:3]
-{
-    CH0 = 0,
-    CH1_default = 1,
-    CH2 = 2,
-    CH3 = 3,
-    CH4 = 4,
-    CH5 = 5,
-    CH6 = 6,
-    CH7 = 7,
-    A_GND = 8,
-    A_VDD = 9,
-    // RESERVED = 10,
-    REF_IN_POS = 11,
-    REF_IN_NEG = 12,
-    Temp_Diode_P = 13,
-    Temp_Diode_M = 14,
-    Internal_VCM = 15
-};
-
-enum class MUX_VIN_POS // [7:4]
-{
-    CH0 = 0,
-    CH1_default = 1,
-    CH2 = 2,
-    CH3 = 3,
-    CH4 = 4,
-    CH5 = 5,
-    CH6 = 6,
-    CH7 = 7,
-    A_GND = 8,
-    A_VDD = 9,
-    // RESERVED = 10,
-    REF_IN_POS = 11,
-    REF_IN_NEG = 12,
-    Temp_Diode_P = 13,
-    Temp_Diode_M = 14,
-    Internal_VCM = 15
-};
-
-/////////////////////////// SCAN Register ///////////////////////////////////
-
-// SCAN BITS. Default set channels here
-bool SinEn_CH0 = 0;
-bool SinEn_CH1 = 0;
-bool SinEn_CH2 = 0;
-bool SinEn_CH3 = 0;
-bool SinEn_CH4 = 0;
-bool SinEn_CH5 = 0;
-bool SinEn_CH6 = 0;
-bool SinEn_CH7 = 0;
-bool Diff_CHA = 1;   //CH0-CH1
-bool Diff_CHB = 1;   //CH2-CH3
-bool Diff_CHA = 1;  //CH4-CH5
-bool Diff_CHB = 1;  //CH6-CH7
-bool TEMP = 1;
-bool A_VDD = 1;
-bool VCM = 1;
-bool OFFSET = 1;
-
-enum class DLY // [23:21], multiplied delay time between each conversion during a scan cycle
-{
-    DMCLKMul0_default = 0,
-    DMCLKMul8 = 1,
-    DMCLKMul16 = 2,
-    DMCLKMul32 = 3,
-    DMCLKMul64 = 4,
-    DMCLKMul128 = 5,
-    DMCLKMul256 = 6,
-    DMCLKMul512 = 7
-};
-
-/////////////////////////// TIMER Register ///////////////////////////////////
-// DELAY timer between two consecutive scan cycles when CONV_MODE[1:0]
-
-// The register uses the entire 24 bits to set the timer.
-
-
-/////////////////////////// OFFSETCAL Register ////////////////////////////////
-// Offset Error Calibration Code (two's complement, MSb first coding)
-
-// The register uses the entire 24 bits.
-
-
-/////////////////////////// GAINCAL Register ////////////////////////////////
-// Gain Error Digital Calibration Code (unsigned, MSb first coding)
-// Default value is 800'000, which provides a gain of 1x.
-
-// The register uses the entire 24 bits.
-
-
-
-/////////////////////////// LOCK REGISTER ////////////////////////////////
-// Write access password entry code.
-// the access code is 0x5a, or 0b10100101. Passing in anyvalue other than this will lock write access to
-// the entire register map
 
 class MCP3564
 {
 private:
-    int32_t _adcRawData = 0; // 24 or 32 bits depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
+    int32_t _adcRawData = 0; // 23 bit + sign or 31 bits + sign depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
 
     uint8_t _pinCS = 0;
     uint8_t _pinMOSI = 0;
@@ -333,16 +97,63 @@ private:
     uint8_t _pinINT = 0;
     SPIClass* _SPI = {nullptr};
 
+    uint8_t _status; // might need to display this as bytes to see what SPI sends back
+
+    // Default registers' values
+    const uint8_t CONFIG0_default = 0b1100'0000;
+    const uint8_t CONFIG1_default = 0b0000'1100;
+    const uint8_t CONFIG2_default = 0b1000'1011;
+    const uint8_t CONFIG3_default = 0b0000'0000;
+    const uint8_t IRQ_default     = 0b0000'0011;
+    const uint8_t MUX_default     = 0b0000'0001;
+    const uint32_t SCAN_default   = 0;
+    const uint32_t TIMER_default  = 0;              // unsigned
+    const int32_t OFFSETCAL_default = 0;            // signed
+    const uint32_t GAINCAL_default = 0x800000;      // unsigned
+    const uint8_t LOCK_default = 0b1010'0101; // or 0xA5, for enabling spi write to the registers
+    
+    // Current registers' values
+
+    uint8_t CONFIG0_current = CONFIG0_default;
+    uint8_t CONFIG1_current = CONFIG1_default;
+    uint8_t CONFIG2_current = CONFIG2_default;
+    uint8_t CONFIG3_current = CONFIG3_default;
+    uint8_t IRQ_current     = IRQ_default;
+    uint8_t MUX_current     = MUX_default;
+    uint32_t SCAN_current   = SCAN_default;
+    uint32_t TIMER_current  = TIMER_default;
+    int32_t OFFSETCAL_current = OFFSETCAL_default;
+    uint32_t GAINCAL_current = GAINCAL_default;
+    uint8_t LOCK_current = LOCK_default; // current must match default for register write access
+    
+    status IRQ_status;
+
     SPISettings _defaultSPISettings = SPISettings{MAX_SPI_SPEED, MSBFIRST, SPI_MODE0};
     // for custom settings, do it in main
 
+    // SCAN BITS. Default set channels here
+    // Might need to rework this
+    bool SinEn_CH0 = 0;
+    bool SinEn_CH1 = 0;
+    bool SinEn_CH2 = 0;
+    bool SinEn_CH3 = 0;
+    bool SinEn_CH4 = 0;
+    bool SinEn_CH5 = 0;
+    bool SinEn_CH6 = 0;
+    bool SinEn_CH7 = 0;
+    bool Diff_CHA = 1;   //CH0-CH1
+    bool Diff_CHB = 1;   //CH2-CH3
+    bool Diff_CHC = 1;  //CH4-CH5
+    bool Diff_CHD = 1;  //CH6-CH7
+    bool TEMP = 1;
+    bool A_VDD = 1;
+    bool VCM = 1;
+    bool OFFSET = 1;
+
+    void _transfer(const uint8_t& addr, const uint8_t& data);
+    void _transfer(const uint8_t& addr, const uint32_t& data);
 public:
     MCP3564(uint8_t CS, uint8_t MOSI, uint8_t MISO, uint8_t SCK, uint8_t MCK, uint8_t INT, SPIClass* mainSPI= &SPI);
-
-    bool begin();
-
-    int32_t getADCRawData() const;
-
 
     // make a setting function for each setting bit (or sets of setting bits) of the registers 
     // that will set the configurations, instead of manually turning on/off bits in main
@@ -350,10 +161,11 @@ public:
     
     // refer to the register map for the corresponding options.
 
-    // use bit writes to set bits?
+    bool begin();
 
-    // CONFIG0
-    void setADCMode(const uint8_t& option);
+    void updateIRQ_status();    // read the 3 bits in the IRQ registers and update 
+                                // read via bit masking and shifting the wanted bit to the first position
+    int32_t getADCRawData() const;
 
 
 
@@ -362,6 +174,73 @@ public:
     int32_t readRegister16(uint8_t* addr); // only CRCCFG has 16 bits
     int32_t readRegister24(uint8_t* addr);
     int32_t readRegister32(uint8_t* addr); // only for 32bit ADCDATA. probably will not use the 32bit setting
+
+// SET BITS BY USING ONLY THE SETTING OPTIONS BELOW!!!!
+/////////////////////////// CONFIG0 register options ///////////////////////////
+    void setADCMode(const ADC_MODE& option);
+    void setSourceSink(const CS_SEL& option);
+    void setClock(const CLK_SEL& option);
+    void setCONFIG0(const CONFIG0& option); // FULL SHUTDOWN
+
+/////////////////////////// CONFIG1 register ///////////////////////////////////
+    void setOSR(const OSR& option);
+    void setPRE(const PRE& option);
+
+/////////////////////////// CONFIG2 register ///////////////////////////////////
+    void setAZ_MUX(const AZ_MUX& option);
+    void setGAIN(const GAIN& option);
+    void setBOOST(const BOOST& option);
+
+/////////////////////////// CONFIG3 register ///////////////////////////////////
+    void setEN_GAINCAL(const EN_GAINCAL& option);
+    void setEN_OFFCAL(const EN_OFFCAL& option);
+    void setEN_CRCCOM(const EN_CRCCOM& option);
+    void setCRC_FORMAT(const CRC_FORMAT& option);
+    void setDATA_FORMAT(const DATA_FORMAT& option);
+    void setCONV_MODE(const CONV_MODE& option);
+
+/////////////////////////// IRQ register //////////////////////////////////////
+    void setEN_STP(const EN_STP& option);
+    void setEN_FASTCMD(const EN_FASTCMD& option);
+    void setIRQ_MODE(const IRQ_MODE& option);
+
+/////////////////////////// MUX register //////////////////////////////////////
+    void setMUX_VIN_neg(const MUX_VIN_neg& option);
+    void setMUX_VIN_pos(const MUX_VIN_pos& option);
+
+/////////////////////////// SCAN register //////////////////////////////////////
+    // Use the bitWrite function to set the channels
+    void setSE_CH0(const bool& option);
+    void setSE_CH1(const bool& option);
+    void setSE_CH2(const bool& option);
+    void setSE_CH3(const bool& option);
+    void setSE_CH4(const bool& option);
+    void setSE_CH5(const bool& option);
+    void setSE_CH6(const bool& option);
+    void setSE_CH7(const bool& option);
+    void setDiff_CHA(const bool& option);
+    void setDiff_CHB(const bool& option);
+    void setDiff_CHC(const bool& option);
+    void setDiff_CHD(const bool& option);
+    void setTEMP(const bool& option);
+    void setA_VDD(const bool& option);
+    void setVCM(const bool& option);
+    void setOFFSET(const bool& option);
+
+    void setDLY(const DLY& option);
+
+/////////////////////////// TIMER register //////////////////////////////////////
+    void setTIMER(const uint32_t& time);
+
+/////////////////////////// OFFSETCAL register //////////////////////////////////
+    void setOFFSETCAL(const int32_t& value);
+
+/////////////////////////// GAINCAL register ///////////////////////////////////
+    void setGAINCAL(const uint32_t& value);
+
+/////////////////////////// LOCK register //////////////////////////////////////
+    void setLOCK(); // 0xA5 = full access to register write
+    void setUNLOCK();
 
 
 
