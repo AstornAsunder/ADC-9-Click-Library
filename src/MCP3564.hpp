@@ -37,21 +37,25 @@
 
 #define MCP3564_DEVICE_TYPE     (0x000F)  // MCP3564 device ID
 
-#define MCP3564_DEVICE_ADDR     (0b01)  // AAC-1852-VP9, not sure abt the SPI address yet
-                                        // If it's not 1, then try 2,3, or 4
+#define MCP3564_DEVICE_ADDR0     (0b00)
+#define MCP3564_DEVICE_ADDR1     (0b01)  // AAC-1852-VP9, not sure abt the SPI address yet
+                                        // If it's not 1, then try 0, 2, or 3
+#define MCP3564_DEVICE_ADDR2     (0b10)
+#define MCP3564_DEVICE_ADDR3     (0b11)
 
 // USE _SPI.Transfer(FASTCMD_...)
-#define FASTCMD_DONTCARE        ((MCP3564_DEVICE_ADDR << 6) | 0) // for selecting the device on the bus if multiple devices are used on the same SPI bus
-#define FASTCMD_CONVERSION      ((MCP3564_DEVICE_ADDR << 6) | 0b101000)
-#define FASTCMD_STANDBY         ((MCP3564_DEVICE_ADDR << 6) | 0b101100)
-#define FASTCMD_SHUTDOWN        ((MCP3564_DEVICE_ADDR << 6) | 0b110000)
-#define FASTCMD_FULLSHUTDOWN    ((MCP3564_DEVICE_ADDR << 6) | 0b110100)
-#define FASTCMD_FULLRESET       ((MCP3564_DEVICE_ADDR << 6) | 0b111000) // reset entire register map to default value according to the datasheet
+// When using a fast command, a status byte will also be embedded as the MSbyte along the SDO line with the data.
+#define FASTCMD_DONTCARE        ((MCP3564_DEVICE_ADDR1 << 6) | 0) // for selecting the device on the bus if multiple devices are used on the same SPI bus
+#define FASTCMD_CONVERSION      ((MCP3564_DEVICE_ADDR1 << 6) | 0b101000)
+#define FASTCMD_STANDBY         ((MCP3564_DEVICE_ADDR1 << 6) | 0b101100)
+#define FASTCMD_SHUTDOWN        ((MCP3564_DEVICE_ADDR1 << 6) | 0b110000)
+#define FASTCMD_FULLSHUTDOWN    ((MCP3564_DEVICE_ADDR1 << 6) | 0b110100)
+#define FASTCMD_FULLRESET       ((MCP3564_DEVICE_ADDR1 << 6) | 0b111000) // reset entire register map to default value according to the datasheet
 
 // for the 3 commands below, insert register address via | 0b0000'00, where the first 4 MS bits are the register address
-#define FASTCMD_STATIC_READ     ((MCP3564_DEVICE_ADDR << 6) | 0b01)
-#define FASTCMD_INCR_WRITE      ((MCP3564_DEVICE_ADDR << 6) | 0b10)
-#define FASTCMD_INCR_READ       ((MCP3564_DEVICE_ADDR << 6) | 0b11)
+#define FASTCMD_STATIC_READ     ((MCP3564_DEVICE_ADDR1 << 6) | 0b01) // Fast read a single register. (page 66)
+#define FASTCMD_INCR_WRITE      ((MCP3564_DEVICE_ADDR1 << 6) | 0b10)
+#define FASTCMD_INCR_READ       ((MCP3564_DEVICE_ADDR1 << 6) | 0b11)
 
 
 // Register map
@@ -77,27 +81,56 @@
 #define MAX_SPI_SPEED 2'000'000
 // use MSBFIRST and SPI_MODE
 
-struct status
+union CONFIG0_union 
 {
-    bool DR = 1;
-    bool CRCCFG = 1;
-    bool POR = 1;
+    struct 
+    {
+        uint8_t ADC_MODE : 2;
+        uint8_t CS_SEL: 2;
+        uint8_t CLK_SEL: 2;
+        uint8_t CONFIG0: 2;
+    };
+    uint8_t raw = 0;
+};
+
+union CONFIG1_union 
+{
+    struct
+    {
+        uint8_t RESERVED1 : 2;
+        uint8_t OSR : 4;
+        uint8_t PRE : 2;
+    };
+    uint8_t raw = 0;
+};
+
+union Status_byte {
+    struct
+    {
+        bool DR;
+        bool CRCCFG;
+        bool POR;
+        bool HI_state;
+        uint8_t dev_addr : 2;
+        uint8_t : 2; // 2 emty bits
+    };
+    uint8_t raw = 0;
 };
 
 class MCP3564
 {
 private:
-    int32_t _adcRawData = 0; // 23 bit + sign or 31 bits + sign depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
+    volatile int32_t _adcRawData = 0; // 23 bit + sign or 31 bits + sign depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
 
     uint8_t _pinCS = 0;
     uint8_t _pinMOSI = 0;
     uint8_t _pinMISO = 0;
     uint8_t _pinSCK = 0;
-    uint8_t _pinMCK = 0;
+    uint8_t _pinMCLK = 0;
     uint8_t _pinINT = 0;
     SPIClass* _SPI = {nullptr};
 
-    uint8_t _status; // might need to display this as bytes to see what SPI sends back
+    //uint8_t _status; // might need to display this as bytes to see what SPI sends back
 
     // Default registers' values
     const uint8_t CONFIG0_default = 0b1100'0000;
@@ -113,7 +146,7 @@ private:
     const uint8_t LOCK_default = 0b1010'0101; // or 0xA5, for enabling spi write to the registers
     
     // Current registers' values
-
+    // Might need to use union for better access to the bits.
     uint8_t CONFIG0_current = CONFIG0_default;
     uint8_t CONFIG1_current = CONFIG1_default;
     uint8_t CONFIG2_current = CONFIG2_default;
@@ -126,13 +159,14 @@ private:
     uint32_t GAINCAL_current = GAINCAL_default;
     uint8_t LOCK_current = LOCK_default; // current must match default for register write access
     
-    status IRQ_status;
+    Status_byte _status;
 
     SPISettings _defaultSPISettings = SPISettings{MAX_SPI_SPEED, MSBFIRST, SPI_MODE0};
     // for custom settings, do it in main
 
     // SCAN BITS. Default set channels here
     // Might need to rework this
+    /*
     bool SinEn_CH0 = 0;
     bool SinEn_CH1 = 0;
     bool SinEn_CH2 = 0;
@@ -149,11 +183,10 @@ private:
     bool A_VDD = 1;
     bool VCM = 1;
     bool OFFSET = 1;
+    */
 
-    void _transfer(const uint8_t& addr, const uint8_t& data);
-    void _transfer(const uint8_t& addr, const uint32_t& data);
 public:
-    MCP3564(uint8_t CS, uint8_t MOSI, uint8_t MISO, uint8_t SCK, uint8_t MCK, uint8_t INT, SPIClass* mainSPI= &SPI);
+    MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, SPIClass* mainSPI= &SPI);
 
     // make a setting function for each setting bit (or sets of setting bits) of the registers 
     // that will set the configurations, instead of manually turning on/off bits in main
@@ -165,15 +198,23 @@ public:
 
     void updateIRQ_status();    // read the 3 bits in the IRQ registers and update 
                                 // read via bit masking and shifting the wanted bit to the first position
-    int32_t getADCRawData() const;
+    volatile int32_t readADCRawData24();
+    volatile int32_t getADCRawData() const;
 
+    bool isLocked(); // use readRegister 8 to read the LOCK register if the value is 0xA5
 
+    void disableSCAN();
 
     int32_t readRegister4(uint8_t* addr); // MDAT output mode for ADCDATA
     int32_t readRegister8(uint8_t* addr);
     int32_t readRegister16(uint8_t* addr); // only CRCCFG has 16 bits
     int32_t readRegister24(uint8_t* addr);
     int32_t readRegister32(uint8_t* addr); // only for 32bit ADCDATA. probably will not use the 32bit setting
+
+
+    void transfer(const uint8_t& addr, const uint8_t& data);
+    void transfer(const uint8_t& addr, const uint32_t& data);
+    void fastCommand(const uint8_t& cmd);
 
 // SET BITS BY USING ONLY THE SETTING OPTIONS BELOW!!!!
 /////////////////////////// CONFIG0 register options ///////////////////////////
@@ -242,8 +283,20 @@ public:
     void setLOCK(); // 0xA5 = full access to register write
     void setUNLOCK();
 
+    Status_byte getStatus() {return _status;}
 
+    uint8_t getCONFIG0_current() {return CONFIG0_current;}
+    uint8_t getCONFIG1_current() {return CONFIG1_current;}
+    uint8_t getCONFIG2_current() {return CONFIG2_current;}
+    uint8_t getCONFIG3_current() {return CONFIG3_current;}
+    uint8_t getIRQ_current() {return IRQ_current;}
+    uint8_t getMUX_current() {return MUX_current;}
+    uint32_t getSCAN_current() {return SCAN_current;}
 
+    uint32_t getTIMER_current() {return TIMER_current;}
+    int32_t getOFFSETCAL_current() {return OFFSETCAL_current;}
+    uint32_t getGAINCAL_current() {return GAINCAL_current;}
+    // for LOCK, read the register directly to see what the current code is.
 };
 
 #endif

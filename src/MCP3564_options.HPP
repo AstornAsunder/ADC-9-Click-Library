@@ -14,7 +14,7 @@ enum class ADC_MODE // [1:0], ADC Operating Mode Selection
     ADC_Conversion = 3 // <-------------- want this setting
 };
 
-enum class CS_SEL // [3:2], Current Source/Sink Selection Bits for Sensor Bias (source on Vin+/sink on Vin-)
+enum class CS_SEL // [3:2], Current Source/Sink Selection Bits for Sensor Bias (source on Vin+/sink on Vin-), for open-short detection
 {
     CS_SEL_0MuA_default = 0,
     CS_SEL_0p9MuA = 1,
@@ -132,7 +132,7 @@ enum class DATA_FORMAT // [5:4], ADC Output Data Format Selection
 {
     FORMAT_24bit_default = 0,
     FORMAT_32bit_24BitLeftJustified = 1,
-    FORMAT_32bit_25BitrightJustified = 2,
+    FORMAT_32bit_25BitRightJustified = 2,
     FORMAT_32bit_25BitRightJustified_CHID = 3
 };
 

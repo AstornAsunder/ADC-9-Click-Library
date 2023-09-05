@@ -1,51 +1,98 @@
 #include "MCP3564.hpp"
 
-MCP3564::MCP3564(uint8_t CS, uint8_t MOSI, uint8_t MISO, uint8_t SCK, uint8_t MCK, uint8_t INT, SPIClass* mainSPI)
-    : _pinCS{CS}, _pinMOSI{MOSI}, _pinMISO{MISO}, _pinSCK{SCK}, _pinMCK{MCK}, _pinINT {INT}, _SPI{mainSPI}
-    {};
+MCP3564::MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, SPIClass* mainSPI)
+    : _pinCS{CS}, _pinSCK{SCK}, _pinMOSI{MOSI}, _pinMISO{MISO}, _pinMCLK{MCLK}, _pinINT {INT}, _SPI{mainSPI}
+{
+    
+}
 
 bool MCP3564::begin()
 {
     pinMode(_pinCS, OUTPUT);
     digitalWrite(_pinCS, HIGH); // disable CS 
-    // set more
+
+    pinMode(_pinSCK, OUTPUT);
+    digitalWrite(_pinSCK, LOW); // may not need this line
+
+    pinMode(_pinMOSI, OUTPUT);
+    pinMode(_pinMISO, INPUT);
+    
+    pinMode(_pinMCLK, OUTPUT); // for CS_SEL = 0, meaning ext clock is used
 
     delay(10);
-
-    // Do a bunch of settings here
-
-
-    delay(10);
+    return true;
 }
 
 //int32_t readReg
 
-int32_t MCP3564::getADCRawData() const
+volatile int32_t MCP3564::readADCRawData24()
+{
+    //return readRegister24(ADCDATA_reg);
+    _SPI->beginTransaction(_defaultSPISettings);
+    digitalWrite(_pinCS, LOW);
+
+    _adcRawData = _SPI->transfer32(ADCDATA_reg); // ADCDATA_reg only has 24 bits, but 
+                                                    // I'm gonna assume the most 8 SB bits will be 0's or just garbage
+                                                    // If it gets too complicated, then just do SPI.transfer() instead
+
+    // data ready interrupt is cleared (Pulled 1 or HIGH) in 2 events:
+    // 1. First falling edge of SCK during an *ADC Output register read*, (so it's pulled 1 when read like above)
+    // meaning it's pulled HIGH right away when read begins();
+    // 2. 16DMCLK clock periods before current conversion ends.
+
+    digitalWrite(_pinCS, HIGH);
+    _SPI->endTransaction();
+    return _adcRawData;
+
+    // need to check again. might not done;
+}
+
+volatile int32_t MCP3564::getADCRawData() const
 {
     return _adcRawData;
 }
 
+void MCP3564::disableSCAN()
+{
+    SCAN_current = 0;
+    transfer(SCAN_reg, SCAN_current);
+}
+
 // for CONFIG0, CONFIG1, CONFIG2, CONFIG3, IRQ, MUX, LOCK
-void MCP3564::_transfer(const uint8_t& addr, const uint8_t& data)
+void MCP3564::transfer(const uint8_t& addr, const uint8_t& data)
 {
     _SPI->beginTransaction(_defaultSPISettings);
     digitalWrite(_pinCS, LOW);
-    _status = _SPI->transfer(addr); // begin talking to the register
+    _SPI->transfer(addr); // begin talking to the register
     _SPI->transfer(data);
     digitalWrite(_pinCS, HIGH);
     _SPI->endTransaction();
 }
+
 // for SCAN, TIMER, OFFSETCAL, GAINCAL
-void MCP3564::_transfer(const uint8_t& addr, const uint32_t& data)
+void MCP3564::transfer(const uint8_t& addr, const uint32_t& data)
 {
     _SPI->beginTransaction(_defaultSPISettings);
     digitalWrite(_pinCS, LOW);
-    _status = _SPI->transfer(addr); // begin talking to the register
+    _SPI->transfer(addr); // begin talking to the register
     _SPI->transfer32(data);
     digitalWrite(_pinCS, HIGH);
     _SPI->endTransaction();
 }
 
+void MCP3564::fastCommand(const uint8_t& cmd)
+{
+    _SPI->beginTransaction(_defaultSPISettings);
+    digitalWrite(_pinCS, LOW);
+    // try all 4 addresses, then determine which one is which
+    _SPI->transfer(cmd - 64); // correspond to addr of 0
+    _status.raw = _SPI->transfer(cmd); // 1
+    _SPI->transfer(cmd + 64); // 2
+    _SPI->transfer(cmd + 128); // 3
+
+    digitalWrite(_pinCS, HIGH);
+    _SPI->endTransaction();
+}
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////// CONFIG0 register settings ///////////////////////////
 /////////////////////////////////////////////////////////////////////////////////
@@ -834,7 +881,7 @@ void MCP3564::setDLY(const DLY& option) //[23:21]
 
 void MCP3564::setTIMER(const uint32_t& time)
 {
-    _transfer(TIMER_reg, time);
+    transfer(TIMER_reg, time);
 }
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////// OFFSETCAL register //////////////////////////////////
@@ -842,7 +889,7 @@ void MCP3564::setTIMER(const uint32_t& time)
 
 void MCP3564::setOFFSETCAL(const int32_t& value)
 {
-    _transfer(OFFSETCAL_reg, static_cast<uint32_t>(value));
+    transfer(OFFSETCAL_reg, static_cast<uint32_t>(value));
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -851,7 +898,7 @@ void MCP3564::setOFFSETCAL(const int32_t& value)
 
 void MCP3564::setGAINCAL(const uint32_t& value)
 {
-    _transfer(GAINCAL_reg, value);
+    transfer(GAINCAL_reg, value);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -860,12 +907,12 @@ void MCP3564::setGAINCAL(const uint32_t& value)
 
 void MCP3564::setLOCK()
 {
-    _transfer(LOCK_reg, static_cast<uint8_t>(69));
+    transfer(LOCK_reg, static_cast<uint8_t>(69));
 }
 
 void MCP3564::setUNLOCK()
 {
-    _transfer(LOCK_reg, static_cast<uint8_t>(0xA5));
+    transfer(LOCK_reg, static_cast<uint8_t>(0xA5));
 }
 
 
