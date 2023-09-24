@@ -16,47 +16,37 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <array>
 #include "MCP3564_options.HPP"
-// Mux settings
-#define MCP_OFFSET (0x88)  
-#define MCP_VCM    (0xF8) 
-#define MCP_AVDD   (0x98) 
-#define MCP_TEMP   (0xDE) 
-#define MCP_DIFFD  (0x67) 
-#define MCP_DIFFC  (0x45) 
-#define MCP_DIFFB  (0x23) 
-#define MCP_DIFFA  (0x01) 
-#define MCP_CH7    (0x78) 
-#define MCP_CH6    (0x68) 
-#define MCP_CH5    (0x58) 
-#define MCP_CH4    (0x48) 
-#define MCP_CH3    (0x38) 
-#define MCP_CH2    (0x28) 
-#define MCP_CH1    (0x18) 
-#define MCP_CH0    (0x08)  
 
+//////////////////////////////////
+// #defines for command byte
 #define MCP3564_DEVICE_TYPE     (0x000F)  // MCP3564 device ID
 
-#define MCP3564_DEVICE_ADDR0     (0b00)
-#define MCP3564_DEVICE_ADDR1     (0b01)  // AAC-1852-VP9, not sure abt the SPI address yet
+#define DEVICE_ADDR0     (0b00)
+#define DEVICE_ADDR1     (0b01) // AAC-1852-VP9 (font too small, might not be corrent, need a magnifying glass), not sure abt the SPI address yet
                                         // If it's not 1, then try 0, 2, or 3
-#define MCP3564_DEVICE_ADDR2     (0b10)
-#define MCP3564_DEVICE_ADDR3     (0b11)
+#define DEVICE_ADDR2     (0b10)
+#define DEVICE_ADDR3     (0b11)
+
 
 // USE _SPI.Transfer(FASTCMD_...)
 // When using a fast command, a status byte will also be embedded as the MSbyte along the SDO line with the data.
-#define FASTCMD_DONTCARE        ((MCP3564_DEVICE_ADDR1 << 6) | 0) // for selecting the device on the bus if multiple devices are used on the same SPI bus
-#define FASTCMD_CONVERSION      ((MCP3564_DEVICE_ADDR1 << 6) | 0b101000)
-#define FASTCMD_STANDBY         ((MCP3564_DEVICE_ADDR1 << 6) | 0b101100)
-#define FASTCMD_SHUTDOWN        ((MCP3564_DEVICE_ADDR1 << 6) | 0b110000)
-#define FASTCMD_FULLSHUTDOWN    ((MCP3564_DEVICE_ADDR1 << 6) | 0b110100)
-#define FASTCMD_FULLRESET       ((MCP3564_DEVICE_ADDR1 << 6) | 0b111000) // reset entire register map to default value according to the datasheet
+#define FASTCMD_DONTCARE        (0) // for selecting the device on the bus if multiple devices are used on the same SPI bus
+#define FASTCMD_CONVERSION      (0b1010)
+#define FASTCMD_STANDBY         (0b1011)
+#define FASTCMD_SHUTDOWN        (0b1100)
+#define FASTCMD_FULLSHUTDOWN    (0b1101)
+#define FASTCMD_FULLRESET       (0b1110) // reset entire register map to default value according to the datasheet
+
 
 // for the 3 commands below, insert register address via | 0b0000'00, where the first 4 MS bits are the register address
-#define FASTCMD_STATIC_READ     ((MCP3564_DEVICE_ADDR1 << 6) | 0b01) // Fast read a single register. (page 66)
-#define FASTCMD_INCR_WRITE      ((MCP3564_DEVICE_ADDR1 << 6) | 0b10)
-#define FASTCMD_INCR_READ       ((MCP3564_DEVICE_ADDR1 << 6) | 0b11)
+#define STATIC_READ (0b01) // read a single register. (page 66)
+#define INCREMENTAL_WRITE (0b10)
+#define INCREMENTAL_WRITE (0b11)
 
+
+//////////////////////////////////
 
 // Register map
 #define ADCDATA_reg     (0x00)
@@ -78,9 +68,10 @@
 
 
 // SPI settings
-#define MAX_SPI_SPEED 2'000'000
+#define MAX_SPI_SPEED 20'000'000
 // use MSBFIRST and SPI_MODE
 
+// union singletons
 union CONFIG0_union 
 {
     struct 
@@ -97,25 +88,118 @@ union CONFIG1_union
 {
     struct
     {
-        uint8_t RESERVED1 : 2;
+        uint8_t : 2; // RESERVED
         uint8_t OSR : 4;
         uint8_t PRE : 2;
     };
     uint8_t raw = 0;
 };
 
-union Status_byte {
+union CONFIG2_union
+{
     struct
     {
-        bool DR;
+        uint8_t : 2;  // RESERVED
+        bool AZ_MUX : 1;
+        uint8_t GAIN : 3;
+        uint8_t BOOST: 2;
+    };
+    uint8_t raw = 0;
+};
+
+union CONFIG3_union
+{
+    struct
+    {
+        bool EN_GAINCAL : 1;
+        bool EN_OFFCAL : 1;
+        bool EN_CRCCOM : 1;
+        bool CRC_FORMAT : 1;
+        uint8_t DATA_FORMAT : 2;
+        uint8_t CONV_MODE : 2;
+    };
+    uint8_t raw = 0;
+};
+
+union IRQ_union
+{
+    struct
+    {
+        bool EN_STP : 1;
+        bool EN_FASTCMD: 1;
+        uint8_t IRQ_MODE: 2;
+        bool POR_STATUS: 1;
+        bool CRCCFG_STATUS: 1;
+        bool DR_STATUS: 1;
+        bool : 1; // NOT USED
+    };
+    uint8_t raw = 0;
+};
+
+union MUX_union
+{
+    struct
+    {
+        uint8_t MUX_VIN_neg : 4;
+        uint8_t MUX_VIN_pos : 4;
+    };
+    uint8_t raw = 0;
+};
+
+union SCAN_union
+{
+    struct
+    {
+        bool CH0 : 1;
+        bool CH1 : 1;
+        bool CH2 : 1;
+        bool CH3 : 1;
+        bool CH4 : 1;
+        bool CH5 : 1;
+        bool CH6 : 1;
+        bool CH7 : 1;
+        bool Diff_CHA : 1;
+        bool Diff_CHB : 1;
+        bool Diff_CHC : 1;
+        bool Diff_CHD : 1;
+        bool TEMP : 1;
+        bool AVdd : 1;
+        bool VCM : 1;
+        bool OFFSET: 1;
+        uint8_t : 4; // empty bits
+        bool : 1; // RESERVED
+        uint8_t DLY : 3;
+        uint8_t : 8; // NOT USED
+    };
+    uint32_t raw = 0;
+};
+
+union Command_byte
+{
+    struct
+    {
+        uint8_t CMD_type : 2;
+        uint8_t fastCommand_or_RegAddr: 4;
+        uint8_t devAddr: 2;
+    };
+    uint8_t raw = 0;
+};
+
+union Status_byte { // After sending a command byte to the click, the click will send back a status byte simultaneously
+                    // Use this to catch that byte
+    struct
+    {
+        bool POR;    // During continue conversion mode, send random command byte to poll for this bit, then
         bool CRCCFG;
-        bool POR;
+        bool DR;
         bool HI_state;
         uint8_t dev_addr : 2;
         uint8_t : 2; // 2 emty bits
     };
     uint8_t raw = 0;
 };
+
+
 
 class MCP3564
 {
@@ -147,43 +231,21 @@ private:
     
     // Current registers' values
     // Might need to use union for better access to the bits.
-    uint8_t CONFIG0_current = CONFIG0_default;
-    uint8_t CONFIG1_current = CONFIG1_default;
-    uint8_t CONFIG2_current = CONFIG2_default;
-    uint8_t CONFIG3_current = CONFIG3_default;
-    uint8_t IRQ_current     = IRQ_default;
-    uint8_t MUX_current     = MUX_default;
-    uint32_t SCAN_current   = SCAN_default;
-    uint32_t TIMER_current  = TIMER_default;
-    int32_t OFFSETCAL_current = OFFSETCAL_default;
-    uint32_t GAINCAL_current = GAINCAL_default;
-    uint8_t LOCK_current = LOCK_default; // current must match default for register write access
-    
+    CONFIG0_union _CONFIG0_current;
+    CONFIG1_union _CONFIG1_current;
+    CONFIG2_union _CONFIG2_current;
+    CONFIG3_union _CONFIG3_current;
+    IRQ_union _IRQ_current;
+    MUX_union _MUX_current;
+    SCAN_union _SCAN_current;
+    uint32_t _TIMER_current;
+    int32_t _OFFSETCAL_current;
+    uint32_t _GAINCAL_current;
+    uint8_t _LOCK_current; // current must match default for register write access
+
     Status_byte _status;
 
     SPISettings _defaultSPISettings = SPISettings{MAX_SPI_SPEED, MSBFIRST, SPI_MODE0};
-    // for custom settings, do it in main
-
-    // SCAN BITS. Default set channels here
-    // Might need to rework this
-    /*
-    bool SinEn_CH0 = 0;
-    bool SinEn_CH1 = 0;
-    bool SinEn_CH2 = 0;
-    bool SinEn_CH3 = 0;
-    bool SinEn_CH4 = 0;
-    bool SinEn_CH5 = 0;
-    bool SinEn_CH6 = 0;
-    bool SinEn_CH7 = 0;
-    bool Diff_CHA = 1;   //CH0-CH1
-    bool Diff_CHB = 1;   //CH2-CH3
-    bool Diff_CHC = 1;  //CH4-CH5
-    bool Diff_CHD = 1;  //CH6-CH7
-    bool TEMP = 1;
-    bool A_VDD = 1;
-    bool VCM = 1;
-    bool OFFSET = 1;
-    */
 
 public:
     MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, SPIClass* mainSPI= &SPI);
@@ -193,15 +255,28 @@ public:
     // also might need to make these private
     
     // refer to the register map for the corresponding options.
+    
+    // transfer buffer for the MOSI line.
+    uint8_t TXBuffer8[1] = {0};
+    uint8_t TXBuffer16[2] = {0,0};
+    uint8_t TXBuffer24[3] = {0,0,0};
+    uint8_t TXBuffer32[4] = {0,0,0,0};
+
+    // return buffer for the MISO line.
+    uint8_t RXBuffer8[1] = {0};
+    uint8_t RXBuffer16[2] = {0,0};
+    uint8_t RXBuffer24[3] = {0,0,0};
+    uint8_t RXBuffer32[4] = {0,0,0,0};
 
     bool begin();
 
-    void updateIRQ_status();    // read the 3 bits in the IRQ registers and update 
-                                // read via bit masking and shifting the wanted bit to the first position
-    volatile int32_t readADCRawData24();
+    volatile int32_t readADCRawData32();
     volatile int32_t getADCRawData() const;
 
     bool isLocked(); // use readRegister 8 to read the LOCK register if the value is 0xA5
+
+    
+
 
     void disableSCAN();
 
@@ -211,11 +286,12 @@ public:
     int32_t readRegister24(uint8_t* addr);
     int32_t readRegister32(uint8_t* addr); // only for 32bit ADCDATA. probably will not use the 32bit setting
 
+    
 
     void transfer(const uint8_t& addr, const uint8_t& data);
     void transfer(const uint8_t& addr, const uint32_t& data);
     void fastCommand(const uint8_t& cmd);
-
+    void fastCommand(const uint8_t& cmd, const uint8_t& addr); // for the 3 fast commands used to read a register.
 // SET BITS BY USING ONLY THE SETTING OPTIONS BELOW!!!!
 /////////////////////////// CONFIG0 register options ///////////////////////////
     void setADCMode(const ADC_MODE& option);
@@ -264,7 +340,7 @@ public:
     void setDiff_CHC(const bool& option);
     void setDiff_CHD(const bool& option);
     void setTEMP(const bool& option);
-    void setA_VDD(const bool& option);
+    void setAVdd(const bool& option);
     void setVCM(const bool& option);
     void setOFFSET(const bool& option);
 
@@ -285,17 +361,27 @@ public:
 
     Status_byte getStatus() {return _status;}
 
-    uint8_t getCONFIG0_current() {return CONFIG0_current;}
-    uint8_t getCONFIG1_current() {return CONFIG1_current;}
-    uint8_t getCONFIG2_current() {return CONFIG2_current;}
-    uint8_t getCONFIG3_current() {return CONFIG3_current;}
-    uint8_t getIRQ_current() {return IRQ_current;}
-    uint8_t getMUX_current() {return MUX_current;}
-    uint32_t getSCAN_current() {return SCAN_current;}
+    
+    void updateAllRegValues(); // read all of the registers and update the CONFIG0_current, CONFIG1_current, CONFIG2_current, etc.
+    void updateCONFIG0_current();
+    void updateCONFIG1_current();
+    void updateCONFIG2_current();
+    void updateCONFIG3_current();
+    void updateIRQ_current();
+    void updateMUX_current();
+    void updateSCAN_current();
 
-    uint32_t getTIMER_current() {return TIMER_current;}
-    int32_t getOFFSETCAL_current() {return OFFSETCAL_current;}
-    uint32_t getGAINCAL_current() {return GAINCAL_current;}
+    // TODO: FOR THESE GETTERS, READ FROM REGISTERS FIRST AND ASSIGNING THE VALUES TO THE CURRENTS BEFORE RETURNING THEM.
+    CONFIG0_union getCONFIG0_current() {updateCONFIG0_current(); return _CONFIG0_current;}
+    CONFIG1_union getCONFIG1_current() {updateCONFIG1_current(); return _CONFIG1_current;}
+    CONFIG2_union getCONFIG2_current() {updateCONFIG2_current(); return _CONFIG2_current;}
+    CONFIG3_union getCONFIG3_current() {updateCONFIG3_current(); return _CONFIG3_current;}
+    IRQ_union getIRQ_current() {updateIRQ_current(); return _IRQ_current;}
+    MUX_union getMUX_current() {updateMUX_current(); return _MUX_current;}
+    SCAN_union getSCAN_current() {updateMUX_current(); return _SCAN_current;}
+    uint32_t getTIMER_current() {return _TIMER_current;}
+    int32_t getOFFSETCAL_current() {return _OFFSETCAL_current;}
+    uint32_t getGAINCAL_current() {return _GAINCAL_current;}
     // for LOCK, read the register directly to see what the current code is.
 };
 
