@@ -43,7 +43,7 @@
 // for the 3 commands below, insert register address via | 0b0000'00, where the first 4 MS bits are the register address
 #define STATIC_READ (0b01) // read a single register. (page 66)
 #define INCREMENTAL_WRITE (0b10)
-#define INCREMENTAL_WRITE (0b11)
+#define INCREMENTAL_READ (0b11)
 
 
 //////////////////////////////////
@@ -207,11 +207,12 @@ private:
     volatile int32_t _adcRawData = 0; // 23 bit + sign or 31 bits + sign depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
 
     uint8_t _pinCS = 0;
+    uint8_t _pinSCK = 0;
     uint8_t _pinMOSI = 0;
     uint8_t _pinMISO = 0;
-    uint8_t _pinSCK = 0;
     uint8_t _pinMCLK = 0;
     uint8_t _pinINT = 0;
+    uint8_t _devAddr = 69;
     SPIClass* _SPI = {nullptr};
 
     //uint8_t _status; // might need to display this as bytes to see what SPI sends back
@@ -248,7 +249,7 @@ private:
     SPISettings _defaultSPISettings = SPISettings{MAX_SPI_SPEED, MSBFIRST, SPI_MODE0};
 
 public:
-    MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, SPIClass* mainSPI= &SPI);
+    MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, uint8_t devAddr, SPIClass* mainSPI= &SPI);
 
     // make a setting function for each setting bit (or sets of setting bits) of the registers 
     // that will set the configurations, instead of manually turning on/off bits in main
@@ -288,8 +289,8 @@ public:
 
     
 
-    void transfer(const uint8_t& addr, const uint8_t& data);
-    void transfer(const uint8_t& addr, const uint32_t& data);
+    void writeRegister8(const uint8_t& addr, const uint8_t& data);
+    void writeRegister24(const uint8_t& addr, const uint32_t& data);
     void fastCommand(const uint8_t& cmd);
     void fastCommand(const uint8_t& cmd, const uint8_t& addr); // for the 3 fast commands used to read a register.
 // SET BITS BY USING ONLY THE SETTING OPTIONS BELOW!!!!
@@ -370,7 +371,17 @@ public:
     void updateIRQ_current();
     void updateMUX_current();
     void updateSCAN_current();
+    void updateTIMER_current();
+    void updateOFFSETCAL_current();
+    void updateGAINCAL_current();
 
+    uint8_t getPinCS() {return _pinCS;}
+    uint8_t getPinSCK() {return _pinSCK;}
+    uint8_t getPinMOSI() {return _pinMOSI;}
+    uint8_t getPinMISO() {return _pinMISO;}
+    uint8_t getPinMCLK () {return _pinMCLK;}
+    uint8_t getPinINT () {return _pinINT;}
+    uint8_t getDevAddr () {return _devAddr;}
     // TODO: FOR THESE GETTERS, READ FROM REGISTERS FIRST AND ASSIGNING THE VALUES TO THE CURRENTS BEFORE RETURNING THEM.
     CONFIG0_union getCONFIG0_current() {updateCONFIG0_current(); return _CONFIG0_current;}
     CONFIG1_union getCONFIG1_current() {updateCONFIG1_current(); return _CONFIG1_current;}

@@ -1,7 +1,7 @@
 #include "MCP3564.hpp"
 
-MCP3564::MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, SPIClass* mainSPI)
-    : _pinCS{CS}, _pinSCK{SCK}, _pinMOSI{MOSI}, _pinMISO{MISO}, _pinMCLK{MCLK}, _pinINT {INT}, _SPI{mainSPI}
+MCP3564::MCP3564(uint8_t CS, uint8_t SCK, uint8_t MOSI, uint8_t MISO, uint8_t MCLK, uint8_t INT, uint8_t devAddr, SPIClass* mainSPI)
+    : _pinCS{CS}, _pinSCK{SCK}, _pinMOSI{MOSI}, _pinMISO{MISO}, _pinMCLK{MCLK}, _pinINT{INT}, _devAddr{devAddr}, _SPI{mainSPI}
 {
     // SETTING DEFAULT VALUES
     _CONFIG0_current.raw = CONFIG0_default;
@@ -44,7 +44,7 @@ volatile int32_t MCP3564::readADCRawData32()
     Command_byte command;
     command.CMD_type = STATIC_READ; 
     command.fastCommand_or_RegAddr = ADCDATA_reg;
-    command.devAddr = DEVICE_ADDR0;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
 
     uint8_t rawCommandByte[1] = {command.raw};
     uint8_t rawStatusByte[1] = {0};
@@ -55,17 +55,18 @@ volatile int32_t MCP3564::readADCRawData32()
     digitalWrite(_pinCS, LOW);
 
 #ifdef TEENSY4_X
-/*
-    _adcRawData = _SPI->transfer32(ADCDATA_reg);
-*/
-    // OR
-
-
     _SPI->transfer(rawCommandByte, rawStatusByte, 1);   // MAKE THIS A COMMAND INSTEAD, ALSO USE THE BUFFER VERSION. Also use the getter to get the status byte immedietaly after
                                                         // this readADCRawData32() function in main
     _status.raw = rawStatusByte[0];
+/*
     _SPI->transfer(getThemBytes, themBytes, 4);
-    _adcRawData = themBytes[0] + (themBytes[1] << 8) + (themBytes[2] << 16) + (themBytes[3] << 24);
+    //_adcRawData = themBytes[0] + (themBytes[1] << 8) + (themBytes[2] << 16) + (themBytes[3] << 24);
+    _adcRawData = themBytes[3] + (themBytes[2] << 8) + (themBytes[1] << 16) + (themBytes[0] << 24);
+*/
+    // data ready interrupt is cleared (Pulled 1 or HIGH) in 2 events:
+    // 1. First falling edge of SCK during an *ADC Output register read*, (so it's pulled 1 when read like above)
+    // meaning it's pulled HIGH right away when read begins();
+    // 2. 16DMCLK clock periods before current conversion ends.
 
     // OR
 /*
@@ -87,10 +88,7 @@ volatile int32_t MCP3564::readADCRawData32()
 #ifdef TEENSY3_x
     Serial.println("Teensy3_x");
 #endif
-    // data ready interrupt is cleared (Pulled 1 or HIGH) in 2 events:
-    // 1. First falling edge of SCK during an *ADC Output register read*, (so it's pulled 1 when read like above)
-    // meaning it's pulled HIGH right away when read begins();
-    // 2. 16DMCLK clock periods before current conversion ends.
+    
 
     digitalWrite(_pinCS, HIGH);
     _SPI->endTransaction();
@@ -107,29 +105,54 @@ volatile int32_t MCP3564::getADCRawData() const
 void MCP3564::disableSCAN()
 {
     _SCAN_current.raw = 0;
-    transfer(SCAN_reg, _SCAN_current.raw);
+    writeRegister24(SCAN_reg, _SCAN_current.raw);
 }
 
 // for CONFIG0, CONFIG1, CONFIG2, CONFIG3, IRQ, MUX, LOCK
-void MCP3564::transfer(const uint8_t& addr, const uint8_t& data)
+void MCP3564::writeRegister8(const uint8_t& addr, const uint8_t& data)
 {
+    Command_byte command;
+    command.CMD_type = INCREMENTAL_WRITE; 
+    command.fastCommand_or_RegAddr = addr;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t dataByte[1] = {data};
+
     _SPI->beginTransaction(_defaultSPISettings);
     digitalWrite(_pinCS, LOW);
-    _SPI->transfer(addr); // begin talking to the register
-    _SPI->transfer(data);
+
+    _SPI->transfer(rawCommandByte, rawStatusByte, 1);   // Use the getter to get the status byte immedietaly after this readADCRawData32() function in main
+    _status.raw = rawStatusByte[0];
+    _SPI->transfer(dataByte, 1);
+
     digitalWrite(_pinCS, HIGH);
     _SPI->endTransaction();
 }
 
 // for SCAN, TIMER, OFFSETCAL, GAINCAL
-void MCP3564::transfer(const uint8_t& addr, const uint32_t& data)
+void MCP3564::writeRegister24(const uint8_t& addr, const uint32_t& data)
 {
+    Command_byte command;
+    command.CMD_type = INCREMENTAL_WRITE; 
+    command.fastCommand_or_RegAddr = addr;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0, 1, 2, 3 to see which one it is.
+
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t dataBytes[4] = {0,0,0,0};
+    dataBytes[0] = (data & 0x00FF0000) >> 16;
+    dataBytes[1] = (data & 0x0000FF00) >> 8;
+    dataBytes[2] = (data & 0x000000FF);
+
     _SPI->beginTransaction(_defaultSPISettings);
     digitalWrite(_pinCS, LOW);
-    _SPI->transfer(addr); // begin talking to the register
-    //_SPI->transfer16(addr);
-    
-    //_SPI->transfer32(data);
+
+    _SPI->transfer(rawCommandByte, rawStatusByte, 1);   // Use the getter to get the status byte immedietaly after this readADCRawData32() function in main
+    _status.raw = rawStatusByte[0];
+    _SPI->transfer(dataBytes, 4);
+
     digitalWrite(_pinCS, HIGH);
     _SPI->endTransaction();
 }
@@ -369,7 +392,7 @@ void MCP3564::setDLY(const DLY& option) //[23:21]
 
 void MCP3564::setTIMER(const uint32_t& time)
 {
-    transfer(TIMER_reg, time);
+    writeRegister24(TIMER_reg, time);
 }
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////// OFFSETCAL register //////////////////////////////////
@@ -394,7 +417,7 @@ void MCP3564::setOFFSETCAL(const int32_t& value)
 
 void MCP3564::setGAINCAL(const uint32_t& value)
 {
-    transfer(GAINCAL_reg, value);
+    writeRegister24(GAINCAL_reg, value);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -403,12 +426,12 @@ void MCP3564::setGAINCAL(const uint32_t& value)
 
 void MCP3564::setLOCK()
 {
-    transfer(LOCK_reg, static_cast<uint8_t>(69));
+    writeRegister8(LOCK_reg, static_cast<uint8_t>(69));
 }
 
 void MCP3564::setUNLOCK()
 {
-    transfer(LOCK_reg, static_cast<uint8_t>(0xA5));
+    writeRegister8(LOCK_reg, static_cast<uint8_t>(0xA5));
 }
 
 void MCP3564::updateAllRegValues()
@@ -418,7 +441,10 @@ void MCP3564::updateAllRegValues()
 
 void MCP3564::updateCONFIG0_current()
 {
-
+    Command_byte command;
+    command.CMD_type = STATIC_READ; 
+    command.fastCommand_or_RegAddr = ADCDATA_reg;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
 }
 void MCP3564::updateCONFIG1_current()
 {
@@ -443,5 +469,18 @@ void MCP3564::updateMUX_current()
 void MCP3564::updateSCAN_current()
 {
 
+}
+
+void MCP3564::updateTIMER_current()
+{
+
+}
+void MCP3564::updateOFFSETCAL_current()
+{
+
+}
+void MCP3564::updateGAINCAL_current()
+{
+    
 }
 //MCP3564::

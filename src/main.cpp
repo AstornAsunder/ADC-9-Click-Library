@@ -20,7 +20,9 @@ const uint8_t pinMISO = 12;
 const uint8_t pinMCLK = 2; // use analogWrite to control the pin
 const uint8_t pinINT = 4;
 
-MCP3564 click {pinCS, pinSCK, pinMOSI, pinMISO, pinMCLK, pinINT, &SPI};
+MCP3564 click0 {pinCS, pinSCK, pinMOSI, pinMISO, pinMCLK, pinINT, DEVICE_ADDR0, &SPI};
+
+//std::array<MCP3564, 4> clicks {click0, click1, click2, click3};
 
 uint32_t priorAnalogResolution = 8;
 
@@ -51,7 +53,7 @@ elapsedMillis mainTimer;
 
 void dataReadyHandler() // should give a wide delay to process data (ie. for the filterData function to play catch up)
 {
-  *(TC_rawADCDataArr.at(i)) = click.readADCRawData32();
+  *(TC_rawADCDataArr.at(i)) = click0.readADCRawData32();
   dataReadyFlag = true;
 }
 
@@ -63,7 +65,7 @@ int32_t filterData(volatile int32_t inputUnfilteredData)
     int32_t filteredData = 0;
     /*
     cli();
-    switch (click.getCONFIG3_current().DATA_FORMAT)
+    switch (click0.getCONFIG3_current().DATA_FORMAT)
     {
       case 0:
         unfilteredData = inputUnfilteredData; // 24 bits
@@ -110,40 +112,40 @@ void setup() {
 
   delay(10);
 
-  if(click.begin())
+  if(click0.begin())
   {
-    //attachInterrupt(digitalPinToInterrupt(pinINT), dataReadyHandler, FALLING);  // when data is ready in SCAN mode
+    //attachInterrupt(digitalPinToInterrupt(click0.getPinINT()), dataReadyHandler, FALLING);  // when data is ready in SCAN mode
                                                                                   // if interrupt pin doesn't work, try the other 2 mechanisms
     //SPI.usingInterrupt(IRQ_NUMBER_t::IRQ_GPIO6789);
     delay(10);
-    //click.fastCommand(FASTCMD_FULLRESET); // reset the entire registers on startup. Don't want previous settings from the previous runs
+    //click0.fastCommand(FASTCMD_FULLRESET); // reset the entire registers on startup. Don't want previous settings from the previous runs
 
-    // Use a standby so that the click reads as commanded and store data in the ADCDATA reg, which can the be read.
-    click.setADCMode(ADC_MODE::ADC_Conversion);
-    click.setCONV_MODE(CONV_MODE::Continuous);
-    click.setDATA_FORMAT(DATA_FORMAT::FORMAT_32bit_24BitLeftJustified);
+    // Use a standby so that the click0 reads as commanded and store data in the ADCDATA reg, which can the be read.
+    click0.setADCMode(ADC_MODE::ADC_Conversion);
+    click0.setCONV_MODE(CONV_MODE::Continuous);
+    click0.setDATA_FORMAT(DATA_FORMAT::FORMAT_32bit_24BitLeftJustified);
 
 
-    click.setEN_FASTCMD(EN_FASTCMD::Disabled); // disable fast commands for security reasons.
+    click0.setEN_FASTCMD(EN_FASTCMD::Disabled); // disable fast commands for security reasons.
     
-    //click.setClock(CLK_SEL::IntClock_NoClockOutput);
+    //click0.setClock(CLK_SEL::IntClock_NoClockOutput);
 
     // supply the clock source via a pwm on a teensy
-    click.setClock(CLK_SEL::ExtDigitalClock_default);
+    click0.setClock(CLK_SEL::ExtDigitalClock_default);
     priorAnalogResolution = analogWriteResolution(8);
-    analogWriteFrequency(pinMCLK, 4'915'200); // ideal frequency, according to the datasheet
-    analogWrite(pinMCLK, 256);
+    analogWriteFrequency(pinMCLK, 4'915'200); // ideal frequency according to the datasheet
+    analogWrite(pinMCLK, 256); // full duty cycle
     //priorAnalogResolution = analogWriteResolution()
 
     
-    //click.setEN_GAINCAL(EN_GAINCAL::Enabled);
-    //click.setEN_OFFCAL(EN_OFFCAL::Enabled);
+    //click0.setEN_GAINCAL(EN_GAINCAL::Enabled);
+    //click0.setEN_OFFCAL(EN_OFFCAL::Enabled);
 
     // Turn on SCAN mode, disable MUX mode.
-    click.setDiff_CHA(true);
-    click.setDiff_CHB(true);
-    click.setDiff_CHC(true);
-    click.setDiff_CHD(true);
+    click0.setDiff_CHA(true);
+    click0.setDiff_CHB(true);
+    click0.setDiff_CHC(true);
+    click0.setDiff_CHD(true);
     
 
     // Set delay timer. Change these up to set how fast data are read.
@@ -151,34 +153,34 @@ void setup() {
     // during test, decrease delay to find a sweet delay time. 
     
     // Set delay between conversions
-    click.setDLY(DLY::DMCLKMul32);
+    click0.setDLY(DLY::DMCLKMul512); //-> from calculations with DMCLK set to 4.9152MHz, this should set each conversion to be 0.1 ms apart.
 
     // Set delay between SCAN cycles
-    //click.setTIMER(256);
+    //click0.setTIMER(49152); // -> from calculations with DMCLK set to 4.9152MHz, this should each SCAN cycle to be 10 ms apart.
 
     /*
     // Send all values to all of the coresponding registers
-    click.transfer(CONFIG1_reg, click.getCONFIG1_current());
+    click0.writeRegister8(CONFIG1_reg, click0.getCONFIG1_current().raw);
     delay(5);
-    click.transfer(CONFIG2_reg, click.getCONFIG2_current());
+    click0.writeRegister8(CONFIG2_reg, click0.getCONFIG2_current().raw);
     delay(5);
-    click.transfer(IRQ_reg, click.getIRQ_current());
+    click0.writeRegister8(IRQ_reg, click0.getIRQ_current().raw);
     delay(5);
-    click.transfer(MUX_reg, click.getMUX_current());
+    click0.writeRegister8(MUX_reg, click0.getMUX_current().raw);
     delay(5);
-    click.transfer(SCAN_reg, click.getSCAN_current());
+    click0.writeRegister24(SCAN_reg, click0.getSCAN_current().raw);
     delay(5);
 
-    click.transfer(CONFIG3_reg, click.getCONFIG3_current());
+    click0.writeRegister8(CONFIG3_reg, click0.getCONFIG3_current().raw);
     delay(5);
-    click.transfer(CONFIG0_reg, click.getCONFIG0_current()); // Begins reading right away when ADCMODE gets set to continuous.
+    click0.writeRegister8(CONFIG0_reg, click0.getCONFIG0_current().raw); // Begins reading right away when ADCMODE gets set to continuous.
     delay(5);
-    click.setLOCK(); // Prevent writing to the registers.
+    click0.setLOCK(); // Prevent writing to the registers.
     */
   }
   else 
   {
-    Serial.println("ADC 9 click failed to initialize");
+    Serial.println("ADC 9 click0 failed to initialize");
     while(1) delay(500);
   }
 }
@@ -204,7 +206,7 @@ void loop() {
   // Debug: manually read registers
 
   delay(10);
-  click.readADCRawData32();
+  click0.readADCRawData32();
 
 /*
   SPI.beginTransaction(SPISettings{1000000, MSBFIRST, SPI_MODE0});
