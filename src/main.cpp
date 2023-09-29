@@ -9,9 +9,22 @@
 
 #include <bitset>
 
-
 #define SD 1
 #define SERIAL 1
+
+#define RTD_MODE 0
+#define CLICK_MODE 1
+
+// Clicks
+//                            THE CLICK USES 3.3V!!!!
+// With a 24-bit resolution and a 5V reference, the step is -> 5/(2^24) * 1000 = 0.000298 mV = 0.298 microVolt
+// So for 41.234mV or 41234 microvolts, the ADC should give ~137584 
+
+// With a 24-bit resolution and a 3.3V reference, the step is -> 3.3/(2^24) * 1000 = 0.000197 mV = 0.197 microVolt
+// So for 41.234mV or 41234 microvolts, the ADC should give ~209309
+
+// --> DO microVolts so that I don't have to worry about decimals in milliVolts which is useful for cold junction compensation
+// when each degree increase in temperature is equal to 0.041 milliVolts or 41 microVolts for type K thermocouple.
 
 const uint8_t pinCS = 10;
 const uint8_t pinSCK = 13;
@@ -20,29 +33,28 @@ const uint8_t pinMISO = 12;
 const uint8_t pinMCLK = 2; // use analogWrite to control the pin
 const uint8_t pinINT = 4;
 
-MCP3564 click0 {pinCS, pinSCK, pinMOSI, pinMISO, pinMCLK, pinINT, DEVICE_ADDR0, &SPI};
+MCP3564 click0 {pinCS, pinSCK, pinMOSI, pinMISO, pinMCLK, pinINT, DEVICE_ADDR1, &SPI};
 
-//std::array<MCP3564, 4> clicks {click0, click1, click2, click3};
+//std::array<MCP3564, 4> clicks {click0, click1, click2};
 
 uint32_t priorAnalogResolution = 8;
 
-volatile int32_t TC1_rawADCData = 0;
-volatile int32_t TC2_rawADCData = 0;
-volatile int32_t TC3_rawADCData = 0;
-volatile int32_t TC4_rawADCData = 0;
-volatile bool dataReadyFlag = false;
+volatile uint32_t TC1_rawADCData = 0;
+volatile uint32_t TC2_rawADCData = 0;
+volatile uint32_t TC3_rawADCData = 0;
+volatile uint32_t TC4_rawADCData = 0;
+volatile bool dataReadyFlag0 = false;
 
 int32_t TC1_filteredADCData = 0;
 int32_t TC2_filteredADCData = 0;
 int32_t TC3_filteredADCData = 0;
 int32_t TC4_filteredADCData = 0;
 
-std::array<volatile int32_t*, 4> TC_rawADCDataArr = {&TC1_rawADCData, &TC2_rawADCData, &TC3_rawADCData, &TC4_rawADCData};
+std::array<volatile uint32_t*, 4> TC_rawADCDataArr = {&TC1_rawADCData, &TC2_rawADCData, &TC3_rawADCData, &TC4_rawADCData};
 std::array<int32_t* , 4> TC_filteredADCDataArr = {&TC1_filteredADCData, &TC2_filteredADCData, &TC3_filteredADCData, &TC4_filteredADCData};
 uint32_t i = 0; // only increment in the filterData function, so give it a wide delay between each conversion
                 // else something not good will happen.
 
-int32_t coldJunctionTemp = 0;
 float TC1_trueTemp = 0.0f;
 float TC2_trueTemp = 0.0f;
 float TC3_trueTemp = 0.0f;
@@ -51,19 +63,28 @@ std::array<float*, 4> TC_trueTempArr = {&TC1_trueTemp, &TC2_trueTemp, &TC3_trueT
 
 elapsedMillis mainTimer; 
 
-void dataReadyHandler() // should give a wide delay to process data (ie. for the filterData function to play catch up)
+// RTD cold junction
+
+Adafruit_MAX31865 RTD_Sensor {0, &SPI1};
+float coldJunctionTemp;
+uint16_t rtd;
+#define RREF 430.0
+#define RRNOMINAL 100.0
+
+// LOOK UP TABLES TO DO COLD JUNCTION COMPENSATION
+
+void dataReadyHandler0() // should give a wide delay to process data (ie. for the filterData function to play catch up)
 {
   *(TC_rawADCDataArr.at(i)) = click0.readADCRawData32();
-  dataReadyFlag = true;
+  dataReadyFlag0 = true;
 }
 
-int32_t filterData(volatile int32_t inputUnfilteredData)
+int32_t filterData(volatile uint32_t inputUnfilteredData)
 {
     
     uint32_t unfilteredData = 0;
-    uint32_t theSign = 0;
     int32_t filteredData = 0;
-    /*
+    
     cli();
     switch (click0.getCONFIG3_current().DATA_FORMAT)
     {
@@ -78,11 +99,9 @@ int32_t filterData(volatile int32_t inputUnfilteredData)
         break;
     }
     sei();
-    */
-    unfilteredData = inputUnfilteredData >> 8;  // Shift to the right since if ADC data format is option 1. (page 42)
-
-    theSign = unfilteredData & 0x800000; // detect if it's a negative number
-    if (theSign == 0x800000) // -> if this is true, the data is negative, which is represented by the 2's complement system
+    
+    //unfilteredData = inputUnfilteredData >> 8;  // Shift to the right since if ADC data format is option 1. (page 42)
+    if (unfilteredData & 0x800000) // -> detects if it's a negative number. If this is true, the data is negative, which is represented by the 2's complement system
     {
       filteredData = unfilteredData | (0xFF000000);
     }
@@ -109,12 +128,17 @@ void setup() {
   Serial.begin(9600);
 
   SPI.begin();
+  SPI1.begin();
+
+#if RTD_MODE
+  RTD_Sensor.begin(MAX31865_2WIRE);
+#endif
 
   delay(10);
 
   if(click0.begin())
   {
-    //attachInterrupt(digitalPinToInterrupt(click0.getPinINT()), dataReadyHandler, FALLING);  // when data is ready in SCAN mode
+    //attachInterrupt(digitalPinToInterrupt(click0.getPinINT()), dataReadyHandler0, CHANGE);  // when data is ready in SCAN mode
                                                                                   // if interrupt pin doesn't work, try the other 2 mechanisms
     //SPI.usingInterrupt(IRQ_NUMBER_t::IRQ_GPIO6789);
     delay(10);
@@ -123,7 +147,7 @@ void setup() {
     // Use a standby so that the click0 reads as commanded and store data in the ADCDATA reg, which can the be read.
     click0.setADCMode(ADC_MODE::ADC_Conversion);
     click0.setCONV_MODE(CONV_MODE::Continuous);
-    click0.setDATA_FORMAT(DATA_FORMAT::FORMAT_32bit_24BitLeftJustified);
+    click0.setDATA_FORMAT(DATA_FORMAT::FORMAT_24bit_default);
 
 
     click0.setEN_FASTCMD(EN_FASTCMD::Disabled); // disable fast commands for security reasons.
@@ -135,8 +159,6 @@ void setup() {
     priorAnalogResolution = analogWriteResolution(8);
     analogWriteFrequency(pinMCLK, 4'915'200); // ideal frequency according to the datasheet
     analogWrite(pinMCLK, 256); // full duty cycle
-    //priorAnalogResolution = analogWriteResolution()
-
     
     //click0.setEN_GAINCAL(EN_GAINCAL::Enabled);
     //click0.setEN_OFFCAL(EN_OFFCAL::Enabled);
@@ -153,11 +175,12 @@ void setup() {
     // during test, decrease delay to find a sweet delay time. 
     
     // Set delay between conversions
-    click0.setDLY(DLY::DMCLKMul512); //-> from calculations with DMCLK set to 4.9152MHz, this should set each conversion to be 0.1 ms apart.
+    //click0.setDLY(DLY::DMCLKMul512); //-> from calculations with DMCLK set to 4.9152MHz, this should set each conversion to be 0.1 ms apart.
+    click0.setDLY(DLY::DMCLKMul64);
 
     // Set delay between SCAN cycles
     //click0.setTIMER(49152); // -> from calculations with DMCLK set to 4.9152MHz, this should each SCAN cycle to be 10 ms apart.
-
+    //click0.setTIMER(300);
     /*
     // Send all values to all of the coresponding registers
     click0.writeRegister8(CONFIG1_reg, click0.getCONFIG1_current().raw);
@@ -175,7 +198,7 @@ void setup() {
     delay(5);
     click0.writeRegister8(CONFIG0_reg, click0.getCONFIG0_current().raw); // Begins reading right away when ADCMODE gets set to continuous.
     delay(5);
-    click0.setLOCK(); // Prevent writing to the registers.
+    click0.setLOCK(); // Prevent accidental writing or error readings from the registers due to EMF and such.
     */
   }
   else 
@@ -186,8 +209,9 @@ void setup() {
 }
 
 void loop() {
+#ifdef CLICK_MODE
   cli();
-  if (dataReadyFlag) 
+  if (dataReadyFlag0) 
   {
     *(TC_filteredADCDataArr.at(i)) = filterData(*(TC_rawADCDataArr.at(i)));
     sei();
@@ -200,14 +224,36 @@ void loop() {
     Serial.println(*TC_filteredADCDataArr.at(2));
     Serial.println(*TC_filteredADCDataArr.at(3));
 
-    dataReadyFlag = false;
+  #ifdef RTD_MODE
+    rtd = RTD_Sensor.readRTD();
+    coldJunctionTemp = RTD_Sensor.temperature(RRNOMINAL, RREF);
+    float ratio = rtd;
+    ratio = ratio / 32768;
+    Serial.print("Ratio = "); Serial.println(ratio,8);
+    Serial.print("Resistance = "); Serial.println(RREF*ratio, 8);
+    Serial.print("Cold Junction Temperature = "); Serial.println(coldJunctionTemp, 8);
+  #endif
+
+    dataReadyFlag0 = false;
   }
   sei();
+#endif
   // Debug: manually read registers
 
   delay(10);
-  click0.readADCRawData32();
+  Serial.println("PRINT");
+  click0.updateCONFIG2_current();
+  //click0.readADCRawData32();
 
+#if RTD_MODE
+  rtd = RTD_Sensor.readRTD();
+  coldJunctionTemp = RTD_Sensor.temperature(RRNOMINAL, RREF);
+  float ratio = rtd;
+  ratio = ratio / 32768;
+  Serial.print("Ratio = "); Serial.println(ratio,8);
+  Serial.print("Resistance = "); Serial.println(RREF*ratio, 8);
+  Serial.print("Cold Junction Temperature = "); Serial.println(coldJunctionTemp, 8);
+#endif
 /*
   SPI.beginTransaction(SPISettings{1000000, MSBFIRST, SPI_MODE0});
   digitalWrite(pinCS, LOW);

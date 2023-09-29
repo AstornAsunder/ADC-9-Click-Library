@@ -35,16 +35,30 @@ bool MCP3564::begin()
     return true;
 }
 
+void MCP3564::_transferAndReceive(const void* commandBuffer, void* statusBuffer, const void* dataBuffer, void* registerBuffer, uint8_t count)
+{
+    _SPI->beginTransaction(_defaultSPISettings);
+    digitalWrite(_pinCS, LOW);
+
+    _SPI->transfer(commandBuffer, statusBuffer, 1);
+    _SPI->transfer(dataBuffer, registerBuffer, count);
+    
+    digitalWrite(_pinCS, HIGH);
+    _SPI->endTransaction();
+}
+
 //int32_t readReg
 
-volatile int32_t MCP3564::readADCRawData32()
+volatile uint32_t MCP3564::readADCRawData32()
 {
     //return readRegister24(ADCDATA_reg);
 
     Command_byte command;
-    command.CMD_type = STATIC_READ; 
-    command.fastCommand_or_RegAddr = ADCDATA_reg;
+
     command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = ADCDATA_reg;
+    command.CMD_type = STATIC_READ; 
+
 
     uint8_t rawCommandByte[1] = {command.raw};
     uint8_t rawStatusByte[1] = {0};
@@ -58,11 +72,10 @@ volatile int32_t MCP3564::readADCRawData32()
     _SPI->transfer(rawCommandByte, rawStatusByte, 1);   // MAKE THIS A COMMAND INSTEAD, ALSO USE THE BUFFER VERSION. Also use the getter to get the status byte immedietaly after
                                                         // this readADCRawData32() function in main
     _status.raw = rawStatusByte[0];
-/*
-    _SPI->transfer(getThemBytes, themBytes, 4);
-    //_adcRawData = themBytes[0] + (themBytes[1] << 8) + (themBytes[2] << 16) + (themBytes[3] << 24);
-    _adcRawData = themBytes[3] + (themBytes[2] << 8) + (themBytes[1] << 16) + (themBytes[0] << 24);
-*/
+
+    //_SPI->transfer(getThemBytes, themBytes, 4);
+    //_adcRawData = (themBytes[0] << 24) | (themBytes[1] << 16) | (themBytes[2] << 8)  | themBytes[3] ;
+
     // data ready interrupt is cleared (Pulled 1 or HIGH) in 2 events:
     // 1. First falling edge of SCK during an *ADC Output register read*, (so it's pulled 1 when read like above)
     // meaning it's pulled HIGH right away when read begins();
@@ -97,7 +110,7 @@ volatile int32_t MCP3564::readADCRawData32()
     // need to check again. might not done;
 }
 
-volatile int32_t MCP3564::getADCRawData() const
+volatile uint32_t MCP3564::getADCRawData() const
 {
     return _adcRawData;
 }
@@ -112,9 +125,10 @@ void MCP3564::disableSCAN()
 void MCP3564::writeRegister8(const uint8_t& addr, const uint8_t& data)
 {
     Command_byte command;
-    command.CMD_type = INCREMENTAL_WRITE; 
-    command.fastCommand_or_RegAddr = addr;
     command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = addr;
+    command.CMD_type = INCREMENTAL_WRITE; 
+    
 
     uint8_t rawCommandByte[1] = {command.raw};
     uint8_t rawStatusByte[1] = {0};
@@ -135,9 +149,9 @@ void MCP3564::writeRegister8(const uint8_t& addr, const uint8_t& data)
 void MCP3564::writeRegister24(const uint8_t& addr, const uint32_t& data)
 {
     Command_byte command;
-    command.CMD_type = INCREMENTAL_WRITE; 
-    command.fastCommand_or_RegAddr = addr;
     command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0, 1, 2, 3 to see which one it is.
+    command.fastCommand_or_RegAddr = addr;
+    command.CMD_type = INCREMENTAL_WRITE; 
 
     uint8_t rawCommandByte[1] = {command.raw};
     uint8_t rawStatusByte[1] = {0};
@@ -149,7 +163,7 @@ void MCP3564::writeRegister24(const uint8_t& addr, const uint32_t& data)
     _SPI->beginTransaction(_defaultSPISettings);
     digitalWrite(_pinCS, LOW);
 
-    _SPI->transfer(rawCommandByte, rawStatusByte, 1);   // Use the getter to get the status byte immedietaly after this readADCRawData32() function in main
+    _SPI->transfer(rawCommandByte, rawStatusByte, 1);   // Use the getter to get the status byte immediately after this readADCRawData32() function in main
     _status.raw = rawStatusByte[0];
     _SPI->transfer(dataBytes, 4);
 
@@ -179,7 +193,6 @@ void MCP3564::setADCMode(const ADC_MODE& option) // [1:0]
     _CONFIG0_current.ADC_MODE = static_cast<uint8_t>(option);
 }
 
-
 void MCP3564::setSourceSink(const CS_SEL& option) // [3:2]
 {
     _CONFIG0_current.CS_SEL = static_cast<uint8_t>(option);
@@ -191,14 +204,6 @@ void MCP3564::setClock(const CLK_SEL& option) // [5:4]
 void MCP3564::setCONFIG0(const CONFIG0& option) // [7:6]
 {
     _CONFIG0_current.CONFIG0 = static_cast<uint8_t>(option);
-/*
-    _SPI->beginTransaction(_defaultSPISettings);
-    digitalWrite(_pinCS, LOW);
-    _SPI->transfer(CONFIG0_reg); // begin talking to the register
-    _SPI->transfer(_CONFIG0_current.raw);
-    digitalWrite(_pinCS, HIGH);
-    _SPI->endTransaction();
-*/
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -436,51 +441,193 @@ void MCP3564::setUNLOCK()
 
 void MCP3564::updateAllRegValues()
 {
-
+    updateCONFIG0_current();
+    updateCONFIG1_current();
+    updateCONFIG2_current();
+    updateCONFIG3_current();
+    updateIRQ_current();
+    updateMUX_current();
+    updateSCAN_current();
+    updateTIMER_current();
+    updateOFFSETCAL_current();
+    updateGAINCAL_current();
 }
 
 void MCP3564::updateCONFIG0_current()
 {
     Command_byte command;
-    command.CMD_type = STATIC_READ; 
-    command.fastCommand_or_RegAddr = ADCDATA_reg;
     command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = CONFIG0_reg;
+    command.CMD_type = STATIC_READ; 
+
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardByte[1] = {0};
+    uint8_t registerByte[1] = {0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardByte, registerByte, 1);
+/*
+    _SPI->beginTransaction(_defaultSPISettings);
+    digitalWrite(_pinCS, LOW);
+
+    _SPI->transfer(rawCommandByte, rawStatusByte, 1);
+    _SPI->transfer(discardByte, registerByte, 1);
+    
+    digitalWrite(_pinCS, HIGH);
+    _SPI->endTransaction();
+*/
+    _status.raw = rawStatusByte[0];
+    _CONFIG0_current.raw = registerByte[0];
 }
+
 void MCP3564::updateCONFIG1_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = CONFIG1_reg; 
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardByte[1] = {0};
+    uint8_t registerByte[1] = {0};
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardByte, registerByte, 1);
+    _status.raw = rawStatusByte[0];
+    _CONFIG1_current.raw = registerByte[0];
 }
 void MCP3564::updateCONFIG2_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    Serial.println(_devAddr);
+    Serial.println(command.devAddr);
+    command.fastCommand_or_RegAddr = CONFIG2_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardByte[1] = {0};
+    uint8_t registerByte[1] = {0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardByte, registerByte, 1);
+    _status.raw = rawStatusByte[0];
+    _CONFIG2_current.raw = registerByte[0];
 }
+
 void MCP3564::updateCONFIG3_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = CONFIG3_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardByte[1] = {0};
+    uint8_t registerByte[1] = {0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardByte, registerByte, 1);
+    _status.raw = rawStatusByte[0];
+    _CONFIG3_current.raw = registerByte[0];
 }
 void MCP3564::updateIRQ_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = IRQ_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardByte[1] = {0};
+    uint8_t registerByte[1] = {0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardByte, registerByte, 1);
+    _status.raw = rawStatusByte[0];
+    _IRQ_current.raw = registerByte[0];
 }
+
 void MCP3564::updateMUX_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = MUX_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardByte[1] = {0};
+    uint8_t registerByte[1] = {0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardByte, registerByte, 1);
+    _status.raw = rawStatusByte[0];
+    _MUX_current.raw = registerByte[0];
 }
 void MCP3564::updateSCAN_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = SCAN_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardBytes[3] = {0,0,0};
+    uint8_t registerBytes[3] = {0,0,0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardBytes, registerBytes, 3);
+    _status.raw = rawStatusByte[0];
+    _SCAN_current.raw = (registerBytes[0] << 16) | (registerBytes[1] << 8) | registerBytes[2];
 }
 
 void MCP3564::updateTIMER_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = TIMER_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardBytes[3] = {0,0,0};
+    uint8_t registerBytes[3] = {0,0,0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardBytes, registerBytes, 3);
+    _status.raw = rawStatusByte[0];
+    _TIMER_current = (registerBytes[0] << 16) + (registerBytes[1] << 8) + registerBytes[2];
 }
+
 void MCP3564::updateOFFSETCAL_current()
 {
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = OFFSETCAL_reg;
+    command.CMD_type = STATIC_READ; 
 
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardBytes[3] = {0,0,0};
+    uint8_t registerBytes[3] = {0,0,0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardBytes, registerBytes, 3);
+    _status.raw = rawStatusByte[0];
+    _OFFSETCAL_current = (registerBytes[0] << 16) | (registerBytes[1] << 8) | registerBytes[2];
 }
+
 void MCP3564::updateGAINCAL_current()
 {
-    
+    Command_byte command;
+    command.devAddr = _devAddr;// not so sure about the devAddress. Switch between 0,1,2,3 to see which one it is.
+    command.fastCommand_or_RegAddr = GAINCAL_reg;
+    command.CMD_type = STATIC_READ; 
+
+    uint8_t rawCommandByte[1] = {command.raw};
+    uint8_t rawStatusByte[1] = {0};
+    uint8_t discardBytes[3] = {0,0,0};
+    uint8_t registerBytes[3] = {0,0,0};
+
+    _transferAndReceive(rawCommandByte, rawStatusByte, discardBytes, registerBytes, 3);
+    _status.raw = rawStatusByte[0];
+    _GAINCAL_current = (registerBytes[0] << 16) | (registerBytes[1] << 8) | registerBytes[2];
 }
 //MCP3564::

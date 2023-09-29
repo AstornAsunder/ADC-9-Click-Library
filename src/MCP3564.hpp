@@ -68,7 +68,7 @@
 
 
 // SPI settings
-#define MAX_SPI_SPEED 20'000'000
+#define MAX_SPI_SPEED 1000000U
 // use MSBFIRST and SPI_MODE
 
 // union singletons
@@ -204,7 +204,7 @@ union Status_byte { // After sending a command byte to the click, the click will
 class MCP3564
 {
 private:
-    volatile int32_t _adcRawData = 0; // 23 bit + sign or 31 bits + sign depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
+    volatile uint32_t _adcRawData = 0; // 23 bit + sign or 31 bits + sign depending on DATA_FORMAT[1:0] or modulator output stream (4-bit wide)
 
     uint8_t _pinCS = 0;
     uint8_t _pinSCK = 0;
@@ -271,23 +271,20 @@ public:
 
     bool begin();
 
-    volatile int32_t readADCRawData32();
-    volatile int32_t getADCRawData() const;
+    volatile uint32_t readADCRawData32();
+    volatile uint32_t getADCRawData() const;
 
-    bool isLocked(); // use readRegister 8 to read the LOCK register if the value is 0xA5
-
-    
 
 
     void disableSCAN();
-
-    int32_t readRegister4(uint8_t* addr); // MDAT output mode for ADCDATA
-    int32_t readRegister8(uint8_t* addr);
-    int32_t readRegister16(uint8_t* addr); // only CRCCFG has 16 bits
-    int32_t readRegister24(uint8_t* addr);
-    int32_t readRegister32(uint8_t* addr); // only for 32bit ADCDATA. probably will not use the 32bit setting
-
-    
+/*
+    uint32_t readRegister4(uint8_t* addr); // MDAT output mode for ADCDATA
+    uint32_t readRegister8(uint8_t* addr);
+    uint32_t readRegister16(uint8_t* addr); // only CRCCFG has 16 bits
+    uint32_t readRegister24(uint8_t* addr);
+    uint32_t readRegister32(uint8_t* addr); // only for 32bit ADCDATA.
+*/
+    void _transferAndReceive(const void* commandBuffer, void* statusBuffer, const void* dataBuffer, void* registerBuffer, uint8_t count);
 
     void writeRegister8(const uint8_t& addr, const uint8_t& data);
     void writeRegister24(const uint8_t& addr, const uint32_t& data);
@@ -357,10 +354,11 @@ public:
     void setGAINCAL(const uint32_t& value);
 
 /////////////////////////// LOCK register //////////////////////////////////////
+    bool isLocked(); // use readRegister 8 to read the LOCK register if the value is 0xA5
     void setLOCK(); // 0xA5 = full access to register write
     void setUNLOCK();
 
-    Status_byte getStatus() {return _status;}
+  
 
     
     void updateAllRegValues(); // read all of the registers and update the CONFIG0_current, CONFIG1_current, CONFIG2_current, etc.
@@ -379,9 +377,9 @@ public:
     uint8_t getPinSCK() {return _pinSCK;}
     uint8_t getPinMOSI() {return _pinMOSI;}
     uint8_t getPinMISO() {return _pinMISO;}
-    uint8_t getPinMCLK () {return _pinMCLK;}
-    uint8_t getPinINT () {return _pinINT;}
-    uint8_t getDevAddr () {return _devAddr;}
+    uint8_t getPinMCLK() {return _pinMCLK;}
+    uint8_t getPinINT() {return _pinINT;}
+    uint8_t getDevAddr() {return _devAddr;}
     // TODO: FOR THESE GETTERS, READ FROM REGISTERS FIRST AND ASSIGNING THE VALUES TO THE CURRENTS BEFORE RETURNING THEM.
     CONFIG0_union getCONFIG0_current() {updateCONFIG0_current(); return _CONFIG0_current;}
     CONFIG1_union getCONFIG1_current() {updateCONFIG1_current(); return _CONFIG1_current;}
@@ -389,10 +387,11 @@ public:
     CONFIG3_union getCONFIG3_current() {updateCONFIG3_current(); return _CONFIG3_current;}
     IRQ_union getIRQ_current() {updateIRQ_current(); return _IRQ_current;}
     MUX_union getMUX_current() {updateMUX_current(); return _MUX_current;}
-    SCAN_union getSCAN_current() {updateMUX_current(); return _SCAN_current;}
-    uint32_t getTIMER_current() {return _TIMER_current;}
-    int32_t getOFFSETCAL_current() {return _OFFSETCAL_current;}
-    uint32_t getGAINCAL_current() {return _GAINCAL_current;}
+    SCAN_union getSCAN_current() {updateSCAN_current(); return _SCAN_current;}
+    uint32_t getTIMER_current() {updateTIMER_current(); return _TIMER_current;}
+    int32_t getOFFSETCAL_current() {updateOFFSETCAL_current(); return _OFFSETCAL_current;}
+    uint32_t getGAINCAL_current() {updateGAINCAL_current(); return _GAINCAL_current;}
+    Status_byte getStatus() {return _status;}
     // for LOCK, read the register directly to see what the current code is.
 };
 
